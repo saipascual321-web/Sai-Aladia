@@ -1,0 +1,597 @@
+--[[
+
+	Universal Aimbot Module by Exunys © CC0 1.0 Universal (2023 - 2024)
+	https://github.com/Exunys
+
+]]
+
+--// Cache
+
+local game, workspace = game, workspace
+local getrawmetatable, getmetatable, setmetatable, pcall, getgenv, next, tick = getrawmetatable, getmetatable, setmetatable, pcall, getgenv, next, tick
+local Vector2new, Vector3zero, CFramenew, Color3fromRGB, Color3fromHSV, Drawingnew, TweenInfonew = Vector2.new, Vector3.zero, CFrame.new, Color3.fromRGB, Color3.fromHSV, Drawing.new, TweenInfo.new
+local getupvalue, mousemoverel, tablefind, tableremove, stringlower, stringsub, mathclamp = debug.getupvalue, mousemoverel or (Input and Input.MouseMove), table.find, table.remove, string.lower, string.sub, math.clamp
+
+local GameMetatable = getrawmetatable and getrawmetatable(game) or {
+	-- Auxillary functions - if the executor doesn't support "getrawmetatable".
+
+	__index = function(self, Index)
+		return self[Index]
+	end,
+
+	__newindex = function(self, Index, Value)
+		self[Index] = Value
+	end
+}
+
+local __index = GameMetatable.__index
+local __newindex = GameMetatable.__newindex
+
+local getrenderproperty, setrenderproperty = getrenderproperty or __index, setrenderproperty or __newindex
+
+local GetService = __index(game, "GetService")
+
+--// Services
+
+local RunService = GetService(game, "RunService")
+local UserInputService = GetService(game, "UserInputService")
+local TweenService = GetService(game, "TweenService")
+local Players = GetService(game, "Players")
+
+--// Service Methods
+
+local LocalPlayer = __index(Players, "LocalPlayer")
+local Camera = __index(workspace, "CurrentCamera")
+
+local FindFirstChild, FindFirstChildOfClass = __index(game, "FindFirstChild"), __index(game, "FindFirstChildOfClass")
+local GetDescendants = __index(game, "GetDescendants")
+local WorldToViewportPoint = __index(Camera, "WorldToViewportPoint")
+local GetPartsObscuringTarget = __index(Camera, "GetPartsObscuringTarget")
+local GetMouseLocation = __index(UserInputService, "GetMouseLocation")
+local GetPlayers = __index(Players, "GetPlayers")
+
+--// Variables
+
+local RequiredDistance, Typing, Running, ServiceConnections, Animation, OriginalSensitivity = 2000, false, false, {}
+local Connect, Disconnect = __index(game, "DescendantAdded").Connect
+
+--[[
+local Degrade = false
+
+do
+	xpcall(function()
+		local TemporaryDrawing = Drawingnew("Line")
+		getrenderproperty = getupvalue(getmetatable(TemporaryDrawing).__index, 4)
+		setrenderproperty = getupvalue(getmetatable(TemporaryDrawing).__newindex, 4)
+		TemporaryDrawing.Remove(TemporaryDrawing)
+	end, function()
+		Degrade, getrenderproperty, setrenderproperty = true, function(Object, Key)
+			return Object[Key]
+		end, function(Object, Key, Value)
+			Object[Key] = Value
+		end
+	end)
+
+	local TemporaryConnection = Connect(__index(game, "DescendantAdded"), function() end)
+	Disconnect = TemporaryConnection.Disconnect
+	Disconnect(TemporaryConnection)
+end
+]]
+
+--// Checking for multiple processes
+
+if ExunysDeveloperAimbot and ExunysDeveloperAimbot.Exit then
+	ExunysDeveloperAimbot:Exit()
+end
+
+--// Environment
+
+getgenv().ExunysDeveloperAimbot = {
+	DeveloperSettings = {
+		UpdateMode = "RenderStepped",
+		TeamCheckOption = "TeamColor",
+		RainbowSpeed = 1 -- Bigger = Slower
+	},
+
+	Settings = {
+		Enabled = true,
+
+		TeamCheck = false,
+		AliveCheck = true,
+		WallCheck = false,
+
+		OffsetToMoveDirection = false,
+		OffsetIncrement = 15,
+
+		Sensitivity = 0, -- Animation length (in seconds) before fully locking onto target
+		Sensitivity2 = 3.5, -- mousemoverel Sensitivity
+
+		LockMode = 1, -- 1 = CFrame; 2 = mousemoverel
+		LockPart = "Head", -- Body part to lock on
+
+		TriggerKey = Enum.UserInputType.MouseButton2,
+		Toggle = false
+	},
+
+	FOVSettings = {
+		Enabled = true,
+		Visible = true,
+
+		Radius = 60,
+		NumSides = 60,
+
+		Thickness = 1,
+		Transparency = 1,
+		Filled = false,
+
+		RainbowColor = false,
+		RainbowOutlineColor = false,
+		Color = Color3fromRGB(255, 255, 255),
+		OutlineColor = Color3fromRGB(0, 0, 0),
+		LockedColor = Color3fromRGB(255, 150, 150)
+	},
+
+	-- Simple Chams / ESP settings (Counter Blox support)
+	ESPSettings = {
+		Enabled = false, -- default off; set to true to enable chams
+		Fill = true, -- use Highlight fill
+		Outline = false,
+		FillTransparency = 0.0,
+		Color = Color3fromRGB(0, 0, 0), -- black chams as requested
+		OnlyEnemies = true -- only show on non-local players (team check will still apply)
+	},
+
+	Blacklisted = {},
+	FOVCircleOutline = Drawingnew("Circle"),
+	FOVCircle = Drawingnew("Circle")
+}
+
+local Environment = getgenv().ExunysDeveloperAimbot
+
+setrenderproperty(Environment.FOVCircle, "Visible", false)
+setrenderproperty(Environment.FOVCircleOutline, "Visible", false)
+
+--// Core Functions
+
+local FixUsername = function(String)
+	local Result
+
+	for _, Value in next, GetPlayers(Players) do
+		local Name = __index(Value, "Name")
+
+		if stringsub(stringlower(Name), 1, #String) == stringlower(String) then
+			Result = Name
+		end
+	end
+
+	return Result
+end
+
+local GetRainbowColor = function()
+	local RainbowSpeed = Environment.DeveloperSettings.RainbowSpeed
+
+	return Color3fromHSV(tick() % RainbowSpeed / RainbowSpeed, 1, 1)
+end
+
+local ConvertVector = function(Vector)
+	return Vector2new(Vector.X, Vector.Y)
+end
+
+local CancelLock = function()
+	Environment.Locked = nil
+
+	local FOVCircle = Environment.FOVCircle--Degrade and Environment.FOVCircle or Environment.FOVCircle.__OBJECT
+
+	setrenderproperty(FOVCircle, "Color", Environment.FOVSettings.Color)
+	__newindex(UserInputService, "MouseDeltaSensitivity", OriginalSensitivity)
+
+	if Animation then
+		Animation:Cancel()
+	end
+end
+
+local GetClosestPlayer = function()
+	local Settings = Environment.Settings
+	local LockPart = Settings.LockPart
+
+	if not Environment.Locked then
+		RequiredDistance = Environment.FOVSettings.Enabled and Environment.FOVSettings.Radius or 2000
+
+		for _, Value in next, GetPlayers(Players) do
+			local Character = __index(Value, "Character")
+			local Humanoid = Character and FindFirstChildOfClass(Character, "Humanoid")
+
+			if Value ~= LocalPlayer and not tablefind(Environment.Blacklisted, __index(Value, "Name")) and Character and FindFirstChild(Character, LockPart) and Humanoid then
+				local PartPosition, TeamCheckOption = __index(Character[LockPart], "Position"), Environment.DeveloperSettings.TeamCheckOption
+
+				if Settings.TeamCheck and __index(Value, TeamCheckOption) == __index(LocalPlayer, TeamCheckOption) then
+					continue
+				end
+
+				if Settings.AliveCheck and __index(Humanoid, "Health") <= 0 then
+					continue
+				end
+
+				if Settings.WallCheck then
+					local BlacklistTable = GetDescendants(__index(LocalPlayer, "Character"))
+
+					for _, Value in next, GetDescendants(Character) do
+						BlacklistTable[#BlacklistTable + 1] = Value
+					end
+
+					if #GetPartsObscuringTarget(Camera, {PartPosition}, BlacklistTable) > 0 then
+						continue
+					end
+				end
+
+				local Vector, OnScreen, Distance = WorldToViewportPoint(Camera, PartPosition)
+				Vector = ConvertVector(Vector)
+				Distance = (GetMouseLocation(UserInputService) - Vector).Magnitude
+
+				if Distance < RequiredDistance and OnScreen then
+					RequiredDistance, Environment.Locked = Distance, Value
+				end
+			end
+		end
+	elseif (GetMouseLocation(UserInputService) - ConvertVector(WorldToViewportPoint(Camera, __index(__index(__index(Environment.Locked, "Character"), LockPart), "Position")))).Magnitude > RequiredDistance then
+		CancelLock()
+	end
+end
+
+--// ESP (Chams) Implementation
+-- Adds simple Highlight instances on player characters, colored black by default.
+
+local Highlights = {} -- map of Player -> Highlight instance(s)
+
+local function create_highlight_for_character(player, character)
+	if not player or not character then return end
+	if player == LocalPlayer then return end
+	if tablefind(Environment.Blacklisted, __index(player, "Name")) then return end
+
+	local esp = Highlights[player]
+	if esp and esp.Parent and esp.Instance then
+		-- already exists
+		return
+	end
+
+	-- Prefer using the Highlight instance if available (clean)
+	local ok, HighlightClass = pcall(function() return Instance.new("Highlight") end)
+	if ok then
+		local h = Instance.new("Highlight")
+		h.Name = "Exunys_Chams"
+		h.Adornee = character
+		h.Parent = workspace
+		h.FillTransparency = Environment.ESPSettings.FillTransparency or 0
+		h.FillColor = Environment.ESPSettings.Color or Color3fromRGB(0,0,0)
+		h.OutlineTransparency = Environment.ESPSettings.Outline and 0 or 1
+		-- keep other properties safe if they don't exist
+
+		Highlights[player] = {Instance = h}
+		return
+	end
+
+	-- Fallback: create BoxHandleAdornments per limb (less ideal but works if Highlight not supported)
+	local adornments = {}
+	for _, part in next, GetDescendants(character) do
+		if part:IsA("BasePart") then
+			local box = Instance.new("BoxHandleAdornment")
+			box.Name = "Exunys_Chams_Part"
+			box.Adornee = part
+			box.AlwaysOnTop = true
+			box.ZIndex = 10
+			box.Size = part.Size
+			box.Transparency = Environment.ESPSettings.FillTransparency or 0
+			box.Color3 = Environment.ESPSettings.Color or Color3fromRGB(0,0,0)
+			box.Parent = workspace
+			adornments[#adornments+1] = box
+		end
+	end
+
+	Highlights[player] = {Parts = adornments}
+end
+
+local function remove_highlight_for_player(player)
+	local entry = Highlights[player]
+	if not entry then return end
+
+	if entry.Instance then
+		pcall(function() entry.Instance:Destroy() end)
+	end
+
+	if entry.Parts then
+		for _, v in next, entry.Parts do
+			pcall(function() v:Destroy() end)
+		end
+	end
+
+	Highlights[player] = nil
+end
+
+local function refresh_highlight(player)
+	remove_highlight_for_player(player)
+	local character = __index(player, "Character")
+	if character then create_highlight_for_character(player, character) end
+end
+
+-- Setup connections to keep highlights in sync
+local function enable_esp()
+	-- initial
+	for _, p in next, GetPlayers(Players) do
+		if p ~= LocalPlayer then
+			local char = __index(p, "Character")
+			if char then create_highlight_for_character(p, char) end
+		end
+	end
+
+	-- when a player's character loads
+	ServiceConnections.PlayerCharacterAdded = Connect(__index(Players, "PlayerAdded"), function(player)
+		-- player joined -> connect to CharacterAdded
+		ServiceConnections["CharAdded_"..tostring(player)] = Connect(__index(player, "CharacterAdded"), function(character)
+			if Environment.ESPSettings.Enabled then
+				create_highlight_for_character(player, character)
+			end
+		end)
+	end)
+
+	-- also handle existing players' CharacterAdded
+	for _, p in next, GetPlayers(Players) do
+		ServiceConnections["CharAdded_"..tostring(p)] = Connect(__index(p, "CharacterAdded"), function(character)
+			if Environment.ESPSettings.Enabled then create_highlight_for_character(p, character) end
+		end)
+	end
+end
+
+local function disable_esp()
+	-- remove all highlights
+	for player, _ in next, Highlights do
+		remove_highlight_for_player(player)
+	end
+
+	-- disconnect character added connections created above
+	for k, v in next, ServiceConnections do
+		if stringsub(k, 1, 8) == "CharAdded" or k == "PlayerCharacterAdded" then
+			pcall(function() Disconnect(v) end)
+			ServiceConnections[k] = nil
+		end
+	end
+end
+
+--// Load
+
+local Load = function()
+	OriginalSensitivity = __index(UserInputService, "MouseDeltaSensitivity")
+
+	local Settings, FOVCircle, FOVCircleOutline, FOVSettings, Offset = Environment.Settings, Environment.FOVCircle, Environment.FOVCircleOutline, Environment.FOVSettings
+
+	--[[
+	if not Degrade then
+		FOVCircle, FOVCircleOutline = FOVCircle.__OBJECT, FOVCircleOutline.__OBJECT
+	end
+	]]
+
+	ServiceConnections.RenderSteppedConnection = Connect(__index(RunService, Environment.DeveloperSettings.UpdateMode), function()
+		local OffsetToMoveDirection, LockPart = Settings.OffsetToMoveDirection, Settings.LockPart
+
+		if FOVSettings.Enabled and Settings.Enabled then
+			for Index, Value in next, FOVSettings do
+				if Index == "Color" then
+					continue
+				end
+
+				if pcall(getrenderproperty, FOVCircle, Index) then
+					setrenderproperty(FOVCircle, Index, Value)
+					setrenderproperty(FOVCircleOutline, Index, Value)
+				end
+			end
+
+			setrenderproperty(FOVCircle, "Color", (Environment.Locked and FOVSettings.LockedColor) or FOVSettings.RainbowColor and GetRainbowColor() or FOVSettings.Color)
+			setrenderproperty(FOVCircleOutline, "Color", FOVSettings.RainbowOutlineColor and GetRainbowColor() or FOVSettings.OutlineColor)
+
+			setrenderproperty(FOVCircleOutline, "Thickness", FOVSettings.Thickness + 1)
+			setrenderproperty(FOVCircle, "Position", GetMouseLocation(UserInputService))
+			setrenderproperty(FOVCircleOutline, "Position", GetMouseLocation(UserInputService))
+		else
+			setrenderproperty(FOVCircle, "Visible", false)
+			setrenderproperty(FOVCircleOutline, "Visible", false)
+		end
+
+		if Running and Settings.Enabled then
+			GetClosestPlayer()
+
+			Offset = OffsetToMoveDirection and __index(FindFirstChildOfClass(__index(Environment.Locked, "Character"), "Humanoid"), "MoveDirection") * (mathclamp(Settings.OffsetIncrement, 1, 30) / 10) or Vector3zero
+
+			if Environment.Locked then
+				local LockedPosition_Vector3 = __index(__index(Environment.Locked, "Character")[LockPart], "Position")
+				local LockedPosition = WorldToViewportPoint(Camera, LockedPosition_Vector3 + Offset)
+
+				if Environment.Settings.LockMode == 2 then
+					mousemoverel((LockedPosition.X - GetMouseLocation(UserInputService).X) / Settings.Sensitivity2, (LockedPosition.Y - GetMouseLocation(UserInputService).Y) / Settings.Sensitivity2)
+				else
+					if Settings.Sensitivity > 0 then
+						Animation = TweenService:Create(Camera, TweenInfonew(Environment.Settings.Sensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {CFrame = CFramenew(Camera.CFrame.Position, LockedPosition_Vector3)})
+						Animation:Play()
+					else
+						__newindex(Camera, "CFrame", CFramenew(Camera.CFrame.Position, LockedPosition_Vector3 + Offset))
+					end
+
+					__newindex(UserInputService, "MouseDeltaSensitivity", 0)
+				end
+
+				setrenderproperty(FOVCircle, "Color", FOVSettings.LockedColor)
+			end
+		end
+	end)
+
+	ServiceConnections.InputBeganConnection = Connect(__index(UserInputService, "InputBegan"), function(Input)
+		local TriggerKey, Toggle = Settings.TriggerKey, Settings.Toggle
+
+		if Typing then
+			return
+		end
+
+		if Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey or Input.UserInputType == TriggerKey then
+			if Toggle then
+				Running = not Running
+
+				if not Running then
+					CancelLock()
+				end
+			else
+				Running = true
+			end
+		end
+	end)
+
+	ServiceConnections.InputEndedConnection = Connect(__index(UserInputService, "InputEnded"), function(Input)
+		local TriggerKey, Toggle = Settings.TriggerKey, Settings.Toggle
+
+		if Toggle or Typing then
+			return
+		end
+
+		if Input.UserInputType == Enum.UserInputType.Keyboard and Input.KeyCode == TriggerKey or Input.UserInputType == TriggerKey then
+			Running = false
+			CancelLock()
+		end
+	end)
+
+	-- Typing / Character connections for ESP
+	ServiceConnections.TextBoxFocused = Connect(__index(UserInputService, "TextBoxFocused"), function()
+		Typing = true
+	end)
+
+	ServiceConnections.TextBoxFocusReleased = Connect(__index(UserInputService, "TextBoxFocusReleased"), function()
+		Typing = false
+	end)
+
+	-- ESP: watch for toggles and maintain highlights each RenderStepped so color/transparency updates apply
+	ServiceConnections.ESPUpdate = Connect(__index(RunService, "RenderStepped"), function()
+		if Environment.ESPSettings.Enabled then
+			-- ensure highlights exist for current players
+			for _, p in next, GetPlayers(Players) do
+				if p ~= LocalPlayer and (not Environment.ESPSettings.OnlyEnemies or (Environment.ESPSettings.OnlyEnemies and p.TeamColor ~= LocalPlayer.TeamColor)) then
+					local char = __index(p, "Character")
+					if char then
+						-- update or create
+						local entry = Highlights[p]
+						if entry and entry.Instance then
+							-- update colors/transparency
+							pcall(function()
+								entry.Instance.FillColor = Environment.ESPSettings.Color
+								entry.Instance.FillTransparency = Environment.ESPSettings.FillTransparency
+								entry.Instance.OutlineTransparency = Environment.ESPSettings.Outline and 0 or 1
+							end)
+						else
+							create_highlight_for_character(p, char)
+						end
+					end
+				else
+					-- ensure removed if disabled by team check / blacklist
+					remove_highlight_for_player(p)
+				end
+			end
+		else
+			-- if disabled, remove any
+			for p, _ in next, Highlights do
+				remove_highlight_for_player(p)
+			end
+		end
+	end)
+
+	-- start ESP if enabled at load
+	if Environment.ESPSettings.Enabled then enable_esp() end
+end
+
+--// Typing Check (already hooked in Load but keep safe in case of earlier calls)
+
+ServiceConnections.TypingStartedConnection = Connect(__index(UserInputService, "TextBoxFocused"), function()
+	Typing = true
+end)
+
+ServiceConnections.TypingEndedConnection = Connect(__index(UserInputService, "TextBoxFocusReleased"), function()
+	Typing = false
+end)
+
+--// Functions
+
+function Environment.Exit(self) -- METHOD | ExunysDeveloperAimbot:Exit(<void>)
+	assert(self, "EXUNYS_AIMBOT-V3.Exit: Missing parameter #1 \"self\" <table>.")
+
+	for Index, _ in next, ServiceConnections do
+		Disconnect(ServiceConnections[Index])
+	end
+
+	-- cleanup ESP highlights
+	disable_esp()
+
+	Load = nil; ConvertVector = nil; CancelLock = nil; GetClosestPlayer = nil; GetRainbowColor = nil; FixUsername = nil
+
+	self.FOVCircle:Remove()
+	self.FOVCircleOutline:Remove()
+	getgenv().ExunysDeveloperAimbot = nil
+end
+
+function Environment.Restart() -- ExunysDeveloperAimbot.Restart(<void>)
+	for Index, _ in next, ServiceConnections do
+		Disconnect(ServiceConnections[Index])
+	end
+
+	Load()
+end
+
+function Environment.Blacklist(self, Username) -- METHOD | ExunysDeveloperAimbot:Blacklist(<string> Player Name)
+	assert(self, "EXUNYS_AIMBOT-V3.Blacklist: Missing parameter #1 \"self\" <table>.")
+	assert(Username, "EXUNYS_AIMBOT-V3.Blacklist: Missing parameter #2 \"Username\" <string>.")
+
+	Username = FixUsername(Username)
+
+	assert(self, "EXUNYS_AIMBOT-V3.Blacklist: User "..Username.." couldn't be found.")
+
+	self.Blacklisted[#self.Blacklisted + 1] = Username
+	-- remove highlights if they exist
+	for _, p in next, GetPlayers(Players) do
+		if __index(p, "Name") == Username then remove_highlight_for_player(p) end
+	end
+end
+
+function Environment.Whitelist(self, Username) -- METHOD | ExunysDeveloperAimbot:Whitelist(<string> Player Name)
+	assert(self, "EXUNYS_AIMBOT-V3.Whitelist: Missing parameter #1 \"self\" <table>.")
+	assert(Username, "EXUNYS_AIMBOT-V3.Whitelist: Missing parameter #2 \"Username\" <string>.")
+
+	Username = FixUsername(Username)
+
+	assert(Username, "EXUNYS_AIMBOT-V3.Whitelist: User "..Username.." couldn't be found.")
+
+	local Index = tablefind(self.Blacklisted, Username)
+
+	assert(Index, "EXUNYS_AIMBOT-V3.Whitelist: User "..Username.." is not blacklisted.")
+
+	tableremove(self.Blacklisted, Index)
+end
+
+function Environment.GetClosestPlayer() -- ExunysDeveloperAimbot.GetClosestPlayer(<void>)
+	GetClosestPlayer()
+	local Value = Environment.Locked
+	CancelLock()
+
+	return Value
+end
+
+-- convenience methods for ESP
+function Environment.EnableESP(self)
+	assert(self, "Missing self")
+	self.ESPSettings.Enabled = true
+	enable_esp()
+end
+
+function Environment.DisableESP(self)
+	assert(self, "Missing self")
+	self.ESPSettings.Enabled = false
+	disable_esp()
+end
+
+Environment.Load = Load -- ExunysDeveloperAimbot.Load()
+
+setmetatable(Environment, {__call = Load})
+
+return Environment
